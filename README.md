@@ -100,7 +100,7 @@ DTC-AirQ-Project/
 │   └── tests/
 │       └── data_quality_tests.sql
 ├── Dashboard/
-│   ├── streamlit_app.py
+│   ├── airquality_app.py
 │   ├── requirements.txt
 │   └── README.md
 ├── pyproject.toml
@@ -139,7 +139,7 @@ The dashboard is built with Looker Studio, a free BI tool from Google that conne
 
 ### Dashboard Access
 - **Looker Studio URL:** **[View Dashboard](https://lookerstudio.google.com/reporting/e789d418-64ba-49a6-ab3a-c87ad5a4d39f/)**
-- **Suggestion:** For a more custom interactive dashboard, You can use the Streamlit app in `Dashboard/` folder. Run with `streamlit run Dashboard/streamlit_app.py`.
+- **Suggestion:** For a more custom interactive dashboard, You can also use streamlit as a dashboard alternative. Run the Streamlit app in `Dashboard/` folder. Run app using command `streamlit run Dashboard/airquality_app.py`.
 
 Additional visualizations include bubble maps for geographical AQI distribution, scatter plots for forecast accuracy, and heatmaps for hourly patterns.
 
@@ -188,7 +188,7 @@ terraform apply
 
 ### Dashboard Access
 - Looker Studio: Connect to the BigQuery dataset and build reports.
-- Streamlit: Run `streamlit run Dashboard/streamlit_app.py` for the alternative dashboard.
+- Streamlit: Run `streamlit run Dashboard/airquality_app.py` for the alternative dashboard.
 
 ## Contributing
 

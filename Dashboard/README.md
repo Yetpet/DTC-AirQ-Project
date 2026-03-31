@@ -19,7 +19,7 @@ $Env:DB_URL = "bigquery://aq_data_lake_air-quality-project-491604.air_quality_da
 ## Run
 
 ```powershell
-streamlit run Dashboard/streamlit_app.py
+streamlit run Dashboard/airquality_app.py
 ```
 
 ## Data table names
@@ -33,7 +33,7 @@ Optional upload mode available in GUI for CSV files.
 
 ## Customization
 
-- Adjust SQL queries in `streamlit_app.py` to point to your exact dataset/schema.
+- Adjust SQL queries in `airquality_app.py` to point to your exact dataset/schema.
 - Add more visuals and filters as needed.
 
 ## Alternative Dashboard Option
