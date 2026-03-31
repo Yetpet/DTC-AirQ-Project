@@ -116,6 +116,10 @@ ipython_config.py
 #pdm.toml
 .pdm-python
 .pdm-build/
+# GCP Keys (CRITICAL)
+*.json
+keys/
+
 
 # pixi
 #   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
@@ -133,6 +137,7 @@ celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
+profiles.yml
 
 # Environments
 .env
@@ -205,3 +210,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Terraform files
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+

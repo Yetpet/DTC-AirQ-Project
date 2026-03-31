@@ -1,0 +1,154 @@
+import requests
+import json
+import os
+import time
+from datetime import datetime, timezone
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from google.cloud import storage
+
+# Configuration
+API_KEY = "{{ kv('OPENWEATHER_API_KEY') }}"
+GCS_BUCKET = "{{ kv('GCS_BUCKET') }}"
+GCP_CREDS_JSON = r'''{{ kv('GCP_CREDS') }}'''
+
+# Geographic data - organized for efficiency
+COUNTRIES_CITIES = {
+    "Nigeria": [
+        {"city": "Lagos", "lat": 6.5244, "lon": 3.3792},
+        {"city": "Abuja", "lat": 9.0765, "lon": 7.3986}
+    ],
+    "USA": [
+        {"city": "New York", "lat": 40.7128, "lon": -74.0060},
+        {"city": "Los Angeles", "lat": 34.0522, "lon": -118.2437}
+    ],
+    "UK": [
+        {"city": "London", "lat": 51.5072, "lon": -0.1276},
+        {"city": "Birmingham", "lat": 52.4862, "lon": -1.8904}
+    ],
+    "India": [
+        {"city": "Delhi", "lat": 28.6139, "lon": 77.2090},
+        {"city": "Mumbai", "lat": 19.0760, "lon": 72.8777}
+    ]
+}
+
+# Configure retry strategy with exponential backoff
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session = requests.Session()
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
+# Parse dates with UTC timezone
+start_dt = datetime.strptime("{{ vars.start_date }}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+end_dt = datetime.now(timezone.utc)
+# end_dt = datetime.strptime("{{ vars.end_date }}", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+start_epoch = int(start_dt.timestamp())
+end_epoch = int(end_dt.timestamp())
+
+start_date_str = start_dt.strftime("%Y-%m-%d")
+end_date_str = end_dt.strftime("%Y-%m-%d")
+
+print(f"📊 Fetching air quality data from {start_date_str} to {end_date_str}")
+print(f"Epoch range: {start_epoch} → {end_epoch}")
+print(f"Total duration: {(end_epoch - start_epoch) / (24*3600):.1f} days")
+
+# Initialize GCS client
+gcs_client = storage.Client.from_service_account_info(json.loads(GCP_CREDS_JSON))
+bucket = gcs_client.bucket(GCS_BUCKET)
+
+# Function to chunk date range (split into ~30 day chunks)
+def chunk_dates(start_epoch, end_epoch, chunk_days=30):
+    chunks = []
+    current_start = start_epoch
+    chunk_seconds = chunk_days * 24 * 3600
+    
+    while current_start < end_epoch:
+        current_end = min(current_start + chunk_seconds, end_epoch)
+        chunks.append((current_start, current_end))
+        current_start = current_end
+    
+    return chunks
+
+date_chunks = chunk_dates(start_epoch, end_epoch, chunk_days=30)
+print(f"Processing {len(date_chunks)} date chunk(s)...\n")
+
+# Fetch and upload per country
+for country, cities in COUNTRIES_CITIES.items():
+    country_total_records = 0
+    city_count = len(cities)
+    
+    for idx, city_info in enumerate(cities, 1):
+        successful_chunks = 0
+        failed_chunks = 0
+        
+        for chunk_idx, (chunk_start, chunk_end) in enumerate(date_chunks, 1):
+            chunk_records = []
+            try:
+                url = "http://api.openweathermap.org/data/2.5/air_pollution/history"
+                params = {
+                    "lat": city_info["lat"],
+                    "lon": city_info["lon"],
+                    "start": chunk_start,
+                    "end": chunk_end,
+                    "appid": API_KEY
+                }
+
+                response = session.get(url, params=params, timeout=90)
+                response.raise_for_status()
+
+                data = response.json()
+                records_list = data.get("list", [])
+
+                for row in records_list:
+                    chunk_records.append({
+                        "ingestion_timestamp": datetime.now(timezone.utc).isoformat(),
+                        "country": country,
+                        "city": city_info["city"],
+                        "lat": city_info["lat"],
+                        "lon": city_info["lon"],
+                        "dt": row["dt"],
+                        "aqi": row["main"]["aqi"],
+                        "components": row["components"]
+                    })
+
+                records_count = len(chunk_records)
+
+                if records_count > 0:
+                    chunk_filename = f"historical_{country}_{start_date_str}_{end_date_str}_chunk{chunk_idx}_{city_info['city'].replace(' ', '_')}.jsonl"
+                    gcs_path = f"raw/historical/{chunk_filename}"
+                    jsonl_content = "\n".join([json.dumps(r) for r in chunk_records])
+
+                    blob = bucket.blob(gcs_path)
+                    blob.upload_from_string(jsonl_content, content_type="application/x-ndjson", timeout=300)
+
+                    country_total_records += records_count
+                    successful_chunks += 1
+                    print(f"  ✓ {country}/{city_info['city']} ({idx}/{city_count}), chunk {chunk_idx}/{len(date_chunks)}: {records_count} records → gs://{GCS_BUCKET}/{gcs_path}")
+                else:
+                    print(f"  ○ {country}/{city_info['city']} ({idx}/{city_count}), chunk {chunk_idx}/{len(date_chunks)}: no records")
+
+            except requests.exceptions.Timeout:
+                failed_chunks += 1
+                print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}), chunk {chunk_idx}/{len(date_chunks)}: TIMEOUT")
+            except requests.exceptions.ConnectionError:
+                failed_chunks += 1
+                print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}), chunk {chunk_idx}/{len(date_chunks)}: CONNECTION ERROR")
+            except Exception as e:
+                failed_chunks += 1
+                print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}), chunk {chunk_idx}/{len(date_chunks)}: {type(e).__name__}")
+            
+            time.sleep(0.5)
+
+        if successful_chunks > 0:
+            print(f"✅ {country}: {country_total_records} total records (chunks: ✓{successful_chunks}/✗{failed_chunks})\n")
+        else:
+            print(f"⚠️  {country}: No data (all chunks failed)\n")
+
+print(f"✅ Data fetch and upload complete!")

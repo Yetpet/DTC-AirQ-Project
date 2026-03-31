@@ -1,0 +1,154 @@
+import requests
+import json
+import time
+from datetime import datetime, timezone
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from google.cloud import storage
+
+# Configuration
+API_KEY = "{{ kv('OPENWEATHER_API_KEY') }}"
+GCS_BUCKET = "{{ kv('GCS_BUCKET') }}"
+GCP_CREDS_JSON = r'''{{ kv('GCP_CREDS') }}'''
+
+# Geographic data - organized for efficiency
+COUNTRIES_CITIES = {
+    "Nigeria": [
+        {"city": "Lagos", "lat": 6.5244, "lon": 3.3792},
+        {"city": "Abuja", "lat": 9.0765, "lon": 7.3986}
+    ],
+    "USA": [
+        {"city": "New York", "lat": 40.7128, "lon": -74.0060},
+        {"city": "Los Angeles", "lat": 34.0522, "lon": -118.2437}
+    ],
+    "UK": [
+        {"city": "London", "lat": 51.5072, "lon": -0.1276},
+        {"city": "Birmingham", "lat": 52.4862, "lon": -1.8904}
+    ],
+    "India": [
+        {"city": "Delhi", "lat": 28.6139, "lon": 77.2090},
+        {"city": "Mumbai", "lat": 19.0760, "lon": 72.8777}
+    ]
+}
+
+# Configure retry strategy with exponential backoff
+retry_strategy = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET"]
+)
+adapter = HTTPAdapter(max_retries=retry_strategy)
+session = requests.Session()
+session.mount("http://", adapter)
+session.mount("https://", adapter)
+
+# Initialize GCS client
+gcs_client = storage.Client.from_service_account_info(json.loads(GCP_CREDS_JSON))
+bucket = gcs_client.bucket(GCS_BUCKET)
+
+# Get current timestamp (date-only for daily overwrites)
+ingestion_timestamp = datetime.now(timezone.utc).isoformat()
+date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+print(f"📊 Fetching current and forecast air pollution data")
+print(f"Ingestion timestamp: {ingestion_timestamp}")
+print(f"Date: {date_str} (files will be overwritten daily)\n")
+
+# Fetch and upload per country
+for country, cities in COUNTRIES_CITIES.items():
+    current_records = []
+    forecast_records = []
+    city_count = len(cities)
+    successful_cities = 0
+    failed_cities = 0
+
+    for idx, city_info in enumerate(cities, 1):
+        try:
+            # FETCH CURRENT DATA
+            current_url = "http://api.openweathermap.org/data/2.5/air_pollution"
+            current_params = {
+                "lat": city_info["lat"],
+                "lon": city_info["lon"],
+                "appid": API_KEY
+            }
+
+            current_response = session.get(current_url, params=current_params, timeout=60)
+            current_response.raise_for_status()
+
+            current_data = current_response.json()
+            current_record = {
+                "ingestion_timestamp": ingestion_timestamp,
+                "country": country,
+                "city": city_info["city"],
+                "lat": city_info["lat"],
+                "lon": city_info["lon"],
+                "dt": current_data.get("dt"),
+                "aqi": current_data.get("main", {}).get("aqi"),
+                "components": current_data.get("components", {})
+            }
+            current_records.append(current_record)
+
+            # FETCH FORECAST DATA
+            forecast_url = "http://api.openweathermap.org/data/2.5/air_pollution/forecast"
+            forecast_params = {
+                "lat": city_info["lat"],
+                "lon": city_info["lon"],
+                "appid": API_KEY
+            }
+
+            forecast_response = session.get(forecast_url, params=forecast_params, timeout=60)
+            forecast_response.raise_for_status()
+
+            forecast_data = forecast_response.json()
+            for item in forecast_data.get("list", []):
+                forecast_record = {
+                    "ingestion_timestamp": ingestion_timestamp,
+                    "country": country,
+                    "city": city_info["city"],
+                    "lat": city_info["lat"],
+                    "lon": city_info["lon"],
+                    "dt": item.get("dt"),
+                    "aqi": item.get("main", {}).get("aqi"),
+                    "components": item.get("components", {})
+                }
+                forecast_records.append(forecast_record)
+
+            successful_cities += 1
+            print(f"  ✓ {country}/{city_info['city']} ({idx}/{city_count}): current + forecast data fetched")
+
+        except requests.exceptions.Timeout:
+            failed_cities += 1
+            print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}): TIMEOUT")
+        except requests.exceptions.ConnectionError:
+            failed_cities += 1
+            print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}): CONNECTION ERROR")
+        except Exception as e:
+            failed_cities += 1
+            print(f"  ✗ {country}/{city_info['city']} ({idx}/{city_count}): {type(e).__name__}")
+
+        time.sleep(0.5)
+
+    # load current data
+    if current_records:
+        current_filename = f"current_pollution_{country}_{date_str}.jsonl"
+        current_gcs_path = f"raw/current/{current_filename}"
+        current_jsonl = "\n".join([json.dumps(r) for r in current_records])
+
+        blob = bucket.blob(current_gcs_path)
+        blob.upload_from_string(current_jsonl, content_type="application/x-ndjson", timeout=300)
+        print(f"  📤 {country} current data → gs://{GCS_BUCKET}/{current_gcs_path}")
+
+    # load forecast data
+    if forecast_records:
+        forecast_filename = f"forecast_pollution_{country}_{date_str}.jsonl"
+        forecast_gcs_path = f"raw/forecast/{forecast_filename}"
+        forecast_jsonl = "\n".join([json.dumps(r) for r in forecast_records])
+
+        blob = bucket.blob(forecast_gcs_path)
+        blob.upload_from_string(forecast_jsonl, content_type="application/x-ndjson", timeout=300)
+        print(f"  📤 {country} forecast data → gs://{GCS_BUCKET}/{forecast_gcs_path}")
+
+    print(f"✅ {country}: current ✓{len(current_records)} | forecast ✓{len(forecast_records)} (cities: ✓{successful_cities}/✗{failed_cities})\n")
+
+print(f"✅ Data fetch and upload complete!")

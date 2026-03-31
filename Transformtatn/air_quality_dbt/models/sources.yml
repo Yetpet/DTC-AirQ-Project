@@ -1,0 +1,17 @@
+sources:
+  - name: bigquery
+    database: air-quality-project-491604
+    schema: air_quality_dataset
+    tables:
+      - name: ext_air_quality_raw_Nigeria
+        description: "External table for historical Nigerian major select cities (lagos and abuja) air quality data from 2020-2026"
+      - name: ext_air_quality_raw_USA
+        description: "External table for historical USA major select cities (New York and Los Angeles) air quality data from 2020-2026"
+      - name: ext_air_quality_raw_UK
+        description: "External table for historical UK major select cities (London and Birmingham) air quality data from 2020-2026"
+      - name: ext_air_quality_raw_India
+        description: "External table for historical Indian major select cities (Delhi and Mumbai) air quality data from 2020-2026"
+      - name: ext_air_quality_current_all
+        description: "External table for current air quality data across all the select countries daily"
+      - name: ext_air_quality_forecast_all
+        description: "External table for forecast air quality data across all the select countries daily"
