@@ -28,3 +28,10 @@ variable "gcs_bucket_name" {
   type        = string
   default     = "aq_data_lake"
 }
+
+variable "credentials" {
+  description = "My Credentials"
+  default     = "~/.gc/air-creds.json"
+  #ex: if you have a directory where this file is called keys with your service account json file
+  #saved there as my-creds.json you could use default = "./keys/my-creds.json"
+}
